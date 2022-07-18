@@ -45,7 +45,7 @@ class Backward_warp(nn.Module):
  
         dim1 = width * height
         dim2 = width
-        base = torch.tensor((torch.arange(num_batch) * dim1),dtype = torch.int64)
+        base = torch.tensor((torch.arange(num_batch) * dim1),dtype = torch.int64).cuda()
         base = base.reshape(num_batch,1).repeat(1,out_height * out_width).view(-1)
 
         base_y0 = base + y0 * dim2
@@ -99,6 +99,188 @@ class Backward_warp(nn.Module):
 
         return self._transform_flow(flow,input, downsample_factor)
 
+
+class Backward_warp_predefined(nn.Module):
+
+    def __init__(self,height,width):
+        super(Backward_warp_predefined,self).__init__()
+        self.meshgrid = self._meshgrid(height, width).cuda()
+
+    def _meshgrid(self,height,width):
+
+        y_t = torch.linspace(0,height - 1, height).reshape(height,1) * torch.ones(1,width)
+        x_t = torch.ones(height,1) * torch.linspace(0, width - 1, width).reshape(1,width)
+
+        x_t_flat = x_t.reshape(1,1,height,width)
+        y_t_flat = y_t.reshape(1,1,height,width)
+
+        grid = torch.cat((x_t_flat,y_t_flat),1)
+
+        return grid
+
+
+    def _interpolate(self,img , x, y , out_height, out_width):
+
+        num_batch,height,width,num_channel = img.size()
+        height_f = float(height)
+        width_f = float(width)
+
+        x = torch.clamp(x,0,width - 1)
+        y = torch.clamp(y,0,height - 1)
+
+        x0_f = x.floor()
+        y0_f = y.floor()
+        x1_f = x0_f + 1.0
+        y1_f = y0_f + 1.0
+
+        x0 = torch.tensor(x0_f, dtype = torch.int64)
+        y0 = torch.tensor(y0_f, dtype = torch.int64)
+        x1 = torch.tensor(torch.clamp(x1_f, 0, width_f -1), dtype = torch.int64)
+        y1 = torch.tensor(torch.clamp(y1_f, 0, height_f -1), dtype = torch.int64)
+ 
+        dim1 = width * height
+        dim2 = width
+        base = torch.tensor((torch.arange(num_batch) * dim1),dtype = torch.int64)
+        base = base.reshape(num_batch,1).repeat(1,out_height * out_width).view(-1)
+
+        base_y0 = base + y0 * dim2
+        base_y1 = base + y1 * dim2
+
+        idx_a = base_y0 + x0
+        idx_b = base_y1 + x0
+        idx_c = base_y0 + x1
+        idx_d = base_y1 + x1
+
+        img_flat = img.reshape(-1,num_channel)
+
+        Ia = img_flat[idx_a]
+        Ib = img_flat[idx_b]
+        Ic = img_flat[idx_c]
+        Id = img_flat[idx_d]
+
+        wa = ((x1_f-x) * (y1_f-y)).reshape(-1,1)
+        wb = ((x1_f-x) * (y-y0_f)).reshape(-1,1)
+        wc = ((x-x0_f) * (y1_f-y)).reshape(-1,1)
+        wd = ((x-x0_f) * (y-y0_f)).reshape(-1,1)
+        output = wa * Ia + wb * Ib + wc * Ic + wd *Id
+
+        return output
+
+    def _transform_flow(self,flow,input,downsample_factor):
+
+        num_batch,num_channel,height,width = input.size()
+
+        out_height = height
+        out_width = width
+
+        control_point = self.meshgrid.repeat(num_batch,1,1,1) + flow
+        input_t = input.permute(0,2,3,1)
+
+        x_s_flat = control_point[:,0,:,:].contiguous().view(-1)
+        y_s_flat = control_point[:,1,:,:].contiguous().view(-1)
+
+        input_transformed = self._interpolate(input_t,x_s_flat,y_s_flat,out_height,out_width)
+
+        input_transformed = input_transformed.reshape(num_batch,out_height,out_width,num_channel)
+
+        output = input_transformed.permute(0,3,1,2)
+
+        return output
+
+    def forward(self,input,flow,downsample_factor = 1):
+
+        return self._transform_flow(flow,input, downsample_factor)
+
+class Backward_warp_multi(nn.Module):
+
+    def __init__(self, height, width):
+        super(Backward_warp_multi,self).__init__()
+
+    def _meshgrid(self,height,width, K=1):
+        y_t = torch.linspace(0,height - 1, height).reshape(height,1) * torch.ones(1,width)
+        x_t = torch.ones(height,1) * torch.linspace(0, width - 1, width).reshape(1,width)
+
+        x_t_flat = x_t.reshape(1,1,height,width)
+        y_t_flat = y_t.reshape(1,1,height,width)
+
+        grid = torch.cat((x_t_flat,y_t_flat),1)
+
+        return grid.repeat(1,K,1,1)
+
+    def _interpolate(self,img , x, y , out_height, out_width, K=1):
+        num_batch,height,width,num_channel = img.size()
+        height_f = float(height)
+        width_f = float(width)
+
+        x = torch.clamp(x,0,width - 1)
+        y = torch.clamp(y,0,height - 1)
+
+        x0_f = x.floor()
+        y0_f = y.floor()
+        x1_f = x0_f + 1.0
+        y1_f = y0_f + 1.0
+
+        x0 = torch.tensor(x0_f, dtype = torch.int64)
+        y0 = torch.tensor(y0_f, dtype = torch.int64)
+        x1 = torch.tensor(torch.clamp(x1_f, 0, width_f -1), dtype = torch.int64)
+        y1 = torch.tensor(torch.clamp(y1_f, 0, height_f -1), dtype = torch.int64)
+ 
+        dim1 = width * height
+        dim2 = width
+        base = torch.tensor((torch.arange(num_batch) * dim1),dtype = torch.int64)
+        base = base.reshape(num_batch,1).repeat(1,out_height * out_width * K).view(-1)
+
+        base_y0 = base + y0 * dim2
+        base_y1 = base + y1 * dim2
+
+        idx_a = base_y0 + x0
+        idx_b = base_y1 + x0
+        idx_c = base_y0 + x1
+        idx_d = base_y1 + x1
+
+        img_flat = img.reshape(-1,num_channel)
+
+        Ia = img_flat[idx_a]
+        Ib = img_flat[idx_b]
+        Ic = img_flat[idx_c]
+        Id = img_flat[idx_d]
+
+        wa = ((x1_f-x) * (y1_f-y)).reshape(-1,1)
+        wb = ((x1_f-x) * (y-y0_f)).reshape(-1,1)
+        wc = ((x-x0_f) * (y1_f-y)).reshape(-1,1)
+        wd = ((x-x0_f) * (y-y0_f)).reshape(-1,1)
+        output = wa * Ia + wb * Ib + wc * Ic + wd *Id
+
+        return output
+
+    def _transform_flow(self,flow,attention,input,downsample_factor):
+        num_batch,num_channel,height,width = input.size()
+        K = attention.size(1)
+
+        out_height = height
+        out_width = width
+        grid = self._meshgrid(height, width, K = K)
+
+        if num_batch > 1:
+            grid = grid.repeat(num_batch,1,1,1)
+
+        control_point = grid.cuda() + flow
+
+        input_t = input.permute(0,2,3,1)
+
+        for k in range(K):
+            x_s_flat = control_point[:,0::2,:,:].contiguous().view(-1)
+            y_s_flat = control_point[:,1::2,:,:].contiguous().view(-1)
+            att_flat = attention[:,:,:,:].contiguous().view(-1)
+
+            input_transformed =  self._interpolate(input_t,x_s_flat,y_s_flat,out_height,out_width,K=K)
+            input_transformed = torch.mul(input_transformed, att_flat.unsqueeze(1)).view(num_batch,K,height,width,num_channel)
+            output = input_transformed.sum(dim=1).permute(0,3,1,2)
+
+        return output
+
+    def forward(self,input,flow,attention,downsample_factor = 1):
+        return self._transform_flow(flow,attention,input, downsample_factor)
 
 class FlowNet_MultiscaleWarp_2Frame(nn.Module):
     ''' 2-frame baseline '''
@@ -209,6 +391,92 @@ class FlowNet_MultiscaleWarp_2Frame_multi(nn.Module):
                                                                                             warp0_conv1, warp0_conv2, warp0_conv3, warp0_conv4)
 
         return tuple([sythsis_output] + flow_list_dict['flow_1'] + [attention1])
+
+class FlowNet_MultiscaleWarp_2Frame_multi_Simple(nn.Module):
+    ''' 2-frame, using multiple 4 flow '''
+    def __init__(self, K):
+        super(FlowNet_MultiscaleWarp_2Frame_multi_Simple, self).__init__()
+        self.K = K
+        # self.FlowNetMulti = FlowNetMulti(6, N=self.K)
+        self.FlowNetMulti = FlowNetMulti_compact(6, N=self.K, compute_attention=True)
+        self.Backward_warp = Backward_warp()
+        self.Backward_warp1 = Backward_warp_predefined(256, 448)
+        self.Backward_warp2 = Backward_warp_predefined(128, 224)
+        self.Backward_warp3 = Backward_warp_predefined(64, 112)
+        self.Backward_warp4 = Backward_warp_predefined(32, 56)
+        self.Encoder = Encoder(3)
+        self.UNet_decoder_2 = UNet_decoder_2()
+
+    def attentioned_warp(self, feat_map, flow_list, flow_softmax_list, warp_fun):
+        for i in range(self.K):
+            if i==0:
+                warped_feat_map = flow_softmax_list[i] * self.Backward_warp(feat_map, flow_list[i])
+            else:
+                warped_feat_map = warped_feat_map + flow_softmax_list[i] * self.Backward_warp(feat_map, flow_list[i])
+        return warped_feat_map
+
+    def forward(self, img0, img1, img2):
+        ## encode img1
+        img1_conv1, img1_conv2, img1_conv3, img1_conv4 = self.Encoder(img1)
+
+        ## encode img0
+        img0_conv1, img0_conv2, img0_conv3, img0_conv4 = self.Encoder(img0)
+
+        # multiple flow 1->0   K * [N,2,H,W]
+        flow_list_dict, flow_softmax_list_dict  =  self.FlowNetMulti(img1, img0)
+        # for f in flow_list_dict:
+        #     print(f, flow_list_dict[f][0].size())
+        # exit()
+            
+        warp0_conv1 = self.attentioned_warp(img0_conv1, flow_list_dict['flow_1'], flow_softmax_list_dict['flow_1_softmax'],self.Backward_warp1)
+        warp0_conv2 = self.attentioned_warp(img0_conv2, flow_list_dict['flow_2'], flow_softmax_list_dict['flow_2_softmax'],self.Backward_warp2)
+        warp0_conv3 = self.attentioned_warp(img0_conv3, flow_list_dict['flow_3'], flow_softmax_list_dict['flow_3_softmax'],self.Backward_warp3)
+        warp0_conv4 = self.attentioned_warp(img0_conv4, flow_list_dict['flow_4'], flow_softmax_list_dict['flow_4_softmax'],self.Backward_warp4)
+        # fusion
+        sythsis_output  = self.UNet_decoder_2(img1_conv1, img1_conv2, img1_conv3, img1_conv4,
+                                                                                            warp0_conv1, warp0_conv2, warp0_conv3, warp0_conv4)
+
+        return tuple([sythsis_output] + flow_list_dict['flow_1'] + flow_softmax_list_dict['flow_1_softmax'])
+
+
+class FlowNet_MultiscaleWarp_2Frame_multi_Simple_efficient(nn.Module):
+    ''' 2-frame, using multiple 4 flow '''
+    def __init__(self, K):
+        super(FlowNet_MultiscaleWarp_2Frame_multi_Simple_efficient, self).__init__()
+        self.K = K
+        # self.FlowNetMulti = FlowNetMulti(6, N=self.K)
+        self.FlowNetMulti = FlowNetMulti_compact(6, N=self.K, compute_attention=True, return_list=False)
+        self.Backward_warp_multi = Backward_warp_multi()
+        self.Encoder = Encoder(3)
+        self.UNet_decoder_2 = UNet_decoder_2()
+
+    def attentioned_warp(self, feat_map, flow_list, flow_softmax_list):
+        for i in range(self.K):
+            if i==0:
+                warped_feat_map = flow_softmax_list[i] * self.Backward_warp(feat_map, flow_list[i])
+            else:
+                warped_feat_map = warped_feat_map + flow_softmax_list[i] * self.Backward_warp(feat_map, flow_list[i])
+        return warped_feat_map
+
+    def forward(self, img0, img1, img2):
+        ## encode img1
+        img1_conv1, img1_conv2, img1_conv3, img1_conv4 = self.Encoder(img1)
+
+        ## encode img0
+        img0_conv1, img0_conv2, img0_conv3, img0_conv4 = self.Encoder(img0)
+
+        # multiple flow 1->0   K * [N,2,H,W]
+        flow_list_dict, flow_softmax_list_dict  =  self.FlowNetMulti(img1, img0)
+        # print(img0_conv1.size(), flow_list_dict['flow_1'].size(), flow_softmax_list_dict['flow_1_softmax'].size())
+        warp0_conv1 = self.Backward_warp_multi(img0_conv1, flow_list_dict['flow_1'], flow_softmax_list_dict['flow_1_softmax'])
+        warp0_conv2 = self.Backward_warp_multi(img0_conv2, flow_list_dict['flow_2'], flow_softmax_list_dict['flow_2_softmax'])
+        warp0_conv3 = self.Backward_warp_multi(img0_conv3, flow_list_dict['flow_3'], flow_softmax_list_dict['flow_3_softmax'])
+        warp0_conv4 = self.Backward_warp_multi(img0_conv4, flow_list_dict['flow_4'], flow_softmax_list_dict['flow_4_softmax'])
+        # fusion
+        sythsis_output  = self.UNet_decoder_2(img1_conv1, img1_conv2, img1_conv3, img1_conv4, 
+                                                warp0_conv1, warp0_conv2, warp0_conv3, warp0_conv4)
+
+        return sythsis_output, flow_list_dict['flow_1'], flow_softmax_list_dict['flow_1_softmax']
 
 
 

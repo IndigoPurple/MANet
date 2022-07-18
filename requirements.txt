@@ -1,3 +1,0 @@
-matplotlib  pip install matplotlib
-imageio
-cv2  pip install opencv-python

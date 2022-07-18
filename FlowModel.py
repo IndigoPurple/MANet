@@ -261,10 +261,12 @@ class FlowNetMulti(nn.Module):
 class FlowNetMulti_compact(nn.Module):
     ''' FlowNet model: output N differnet flow using compact refinement network '''
 
-    def __init__(self, in_ch, N = 4):
+    def __init__(self, in_ch, N = 4, compute_attention=False, return_list=True):
         super(FlowNetMulti_compact, self).__init__()
 
         self.N = N
+        self.compute_attention = compute_attention
+        self.return_list = return_list
         activation = 'leaky_relu'
         init_type = 'w_init_leaky'
 
@@ -319,6 +321,13 @@ class FlowNetMulti_compact(nn.Module):
         self.concat0_conv2 = conv_activation(16, 16, kernel_size = 7, stride = 1, padding = 3,activation = 'selu', init_type = 'w_init')
         self.flow_12 = flow(16,2*N)
 
+        # compute attention map if necessary
+        if compute_attention:
+            self.flow3_softmax = flow(256 + 128 + 2*N, N)
+            self.flow2_softmax = flow(64 + 128 + 2*N, N)
+            self.flow1_softmax = flow(64 + 64 + 2*N, N)
+            self.flow12_softmax = flow(16,N)
+            self.softmax = nn.Softmax(dim=1)
 
     def forward(self, input_img1_LR, input_img2_HR):
         ## encoder
@@ -357,35 +366,73 @@ class FlowNetMulti_compact(nn.Module):
         flow3 = self.flow3(concat3)
         flow3_up = self.flow3_up(flow3)
         deconv2 = self.deconv2(concat3)
+        if self.compute_attention:
+            flow3_softmax = self.softmax(self.flow3_softmax(concat3))
 
         concat2 = torch.cat((conv2,deconv2,flow3_up),1)
         flow2 = self.flow2(concat2)
         flow2_up = self.flow2_up(flow2)
         deconv1 = self.deconv1(concat2)
+        if self.compute_attention:
+            flow2_softmax = self.softmax(self.flow2_softmax(concat2))
 
         concat1 = torch.cat((conv1,deconv1,flow2_up),1)
         flow1 = self.flow1(concat1)
         flow1_up = self.flow1_up(flow1)
         deconv0 = self.deconv0(concat1)
+        if self.compute_attention:
+            flow1_softmax = self.softmax(self.flow1_softmax(concat1))
 
         concat0 = torch.cat((input_img2_HR,deconv0,flow1_up),1)
         concat0_conv1 = self.concat0_conv1(concat0)
         concat0_conv2 = self.concat0_conv2(concat0_conv1)
         flow_12 = self.flow_12(concat0_conv2)
+        if self.compute_attention:
+            flow12_softmax = self.softmax(self.flow12_softmax(concat0_conv2))
 
         ## output is: flow_12, flow1, flow2, flow3
         ## split result (or not)
-        flow_list_dict = {'flow_1':list(),
-                            'flow_2':list(),
-                            'flow_3':list(),
-                            'flow_4':list()}
-        
-        flow_list_dict['flow_1'] = list(torch.split(flow_12, 2, dim=1))
-        flow_list_dict['flow_2'] = list(torch.split(flow1, 2, dim=1))
-        flow_list_dict['flow_3'] = list(torch.split(flow2, 2, dim=1))
-        flow_list_dict['flow_4'] = list(torch.split(flow3, 2, dim=1))
+        if self.return_list:
+            flow_list_dict = {'flow_1':list(),
+                                'flow_2':list(),
+                                'flow_3':list(),
+                                'flow_4':list()}
+            
+            flow_list_dict['flow_1'] = list(torch.split(flow_12, 2, dim=1))
+            flow_list_dict['flow_2'] = list(torch.split(flow1, 2, dim=1))
+            flow_list_dict['flow_3'] = list(torch.split(flow2, 2, dim=1))
+            flow_list_dict['flow_4'] = list(torch.split(flow3, 2, dim=1))
 
-        return flow_list_dict
+            if self.compute_attention:
+                flow_softmax_list_dict = {'flow_1_softmax':list(),
+                                'flow_2_softmax':list(),
+                                'flow_3_softmax':list(),
+                                'flow_4_softmax':list()}
+                flow_softmax_list_dict['flow_1_softmax'] = list(torch.split(flow12_softmax, 1, dim=1))
+                flow_softmax_list_dict['flow_2_softmax'] = list(torch.split(flow1_softmax, 1, dim=1))
+                flow_softmax_list_dict['flow_3_softmax'] = list(torch.split(flow2_softmax, 1, dim=1))
+                flow_softmax_list_dict['flow_4_softmax'] = list(torch.split(flow3_softmax, 1, dim=1))
+
+            if self.compute_attention:
+                return flow_list_dict, flow_softmax_list_dict
+            else:
+                return flow_list_dict
+        else:
+            flow_softmax_list_dict = {'flow_1_softmax':flow12_softmax,
+                            'flow_2_softmax':flow1_softmax,
+                            'flow_3_softmax':flow2_softmax,
+                            'flow_4_softmax':flow3_softmax
+                            }
+            if self.compute_attention:
+                flow_list_dict = {'flow_1':flow_12,
+                                    'flow_2':flow1,
+                                    'flow_3':flow2,
+                                    'flow_4':flow3
+                                }
+            if self.compute_attention:
+                return flow_list_dict, flow_softmax_list_dict
+            else:
+                return flow_list_dict
 
 if __name__ == '__main__':
     x = FlowNetMulti(6)

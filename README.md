@@ -2,7 +2,7 @@
 In this repository we provide code of the paper:
 > **MANet: Improving Video Denoising with a Multi-Alignment Network**
 
-> Yaping Zhao, Haitian Zheng, Zhongrui Wang, Edmund Y. Lam
+> Yaping Zhao, Haitian Zheng, Zhongrui Wang, Jiebo Luo, Edmund Y. Lam
 
 > arxiv link: https://arxiv.org/abs/2202.09704
 

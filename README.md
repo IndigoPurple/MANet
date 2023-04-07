@@ -15,6 +15,14 @@ In this repository we provide code of the paper:
  ------ | ------ | ------ | ------
 ![Flow](img/flow_1.gif "One of the four estimated flow maps for multiple alignment.")|![Flow](img/flow_2.gif "One of the four estimated flow maps for multiple alignment.")|![Flow](img/flow_3.gif "One of the four estimated flow maps for multiple alignment.")|![Flow](img/flow_4.gif "One of the four estimated flow maps for multiple alignment.")
 
+# Quick Start
+If you simply want a quick start without training or downloading the model, try running:
+```
+conda env create -f environment.yml
+conda activate manet
+python train_FlowNet_ms_warping_multi.py --test_or_train train
+```
+
 # Usage
 0. For pre-requisites, run:
 ```
